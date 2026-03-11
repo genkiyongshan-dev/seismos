@@ -180,6 +180,11 @@ let running=false,sensorActive=false,startTime=null,frameN=0;
 let colorMode='terrain',viewMode='iso';
 let range=100,amp=5,decay=0.92,gridN=20;
 let accelX=0,accelY=0,accelZ=0;
+// 重力除去用ローパスフィルター
+let gravX=0,gravY=0,gravZ=9.8;
+const ALPHA=0.85;
+// 振動の前フレーム値（差分用）
+let prevFiltX=0,prevFiltY=0,prevFiltZ=0;
 const HIST=200;
 let histX=[],histY=[],histZ=[];
 let heights=[];
@@ -226,8 +231,23 @@ document.getElementById('initBtn').addEventListener('click',async()=>{
 
 function startSensor(){
   window.addEventListener('devicemotion',e=>{
-    const a=e.accelerationIncludingGravity||e.acceleration;if(!a)return;
-    accelX=a.x||0;accelY=a.y||0;accelZ=a.z||0;
+    const clean=e.acceleration;
+    const raw=e.accelerationIncludingGravity;
+    if(!raw&&!clean)return;
+    if(clean&&clean.x!==null&&Math.abs(clean.x)+Math.abs(clean.y)+Math.abs(clean.z)<20){
+      // 重力除去済みデータがある（iOS）
+      accelX=clean.x||0;
+      accelY=clean.y||0;
+      accelZ=clean.z||0;
+    } else if(raw){
+      // ローパスフィルターで重力を推定し差し引く
+      gravX=ALPHA*gravX+(1-ALPHA)*(raw.x||0);
+      gravY=ALPHA*gravY+(1-ALPHA)*(raw.y||0);
+      gravZ=ALPHA*gravZ+(1-ALPHA)*(raw.z||0);
+      accelX=(raw.x||0)-gravX;
+      accelY=(raw.y||0)-gravY;
+      accelZ=(raw.z||0)-gravZ;
+    }
     if(!sensorActive){sensorActive=true;document.getElementById('dSensor').classList.add('on');}
   });
   launchApp(true);
@@ -326,19 +346,23 @@ function loop(){
   if(!running)return;
   requestAnimationFrame(loop);
   if(!sensorActive){
+    // デモ：静かな微細振動
     const t=Date.now()*.001;
-    accelX=Math.sin(t*.7)*.4+Math.sin(t*2.1)*.12;
-    accelY=Math.cos(t*.5)*.3+Math.sin(t*3.3)*.1;
-    accelZ=Math.sin(t*1.2)*.2;
+    accelX=Math.sin(t*.3)*.05+Math.sin(t*1.1)*.02;
+    accelY=Math.cos(t*.4)*.04+Math.sin(t*1.7)*.02;
+    accelZ=Math.sin(t*.6)*.03;
   }
-  const mag=Math.sqrt(accelX**2+accelY**2+accelZ**2);
-  histX.push(accelX);if(histX.length>HIST)histX.shift();
-  histY.push(accelY);if(histY.length>HIST)histY.shift();
-  histZ.push(accelZ);if(histZ.length>HIST)histZ.shift();
+  // 微細振動だけ使う（大きすぎる値はノイズとして除去）
+  const clamp=(v,max)=>Math.max(-max,Math.min(max,v));
+  const vx=clamp(accelX,5), vy=clamp(accelY,5), vz=clamp(accelZ,5);
+  const mag=Math.sqrt(vx**2+vy**2+vz**2);
+  histX.push(vx);if(histX.length>HIST)histX.shift();
+  histY.push(vy);if(histY.length>HIST)histY.shift();
+  histZ.push(vz);if(histZ.length>HIST)histZ.shift();
 
   for(let r=0;r<=gridN;r++)for(let c=0;c<=gridN;c++)heights[r][c]*=decay;
   const cx=Math.floor(gridN/2),cy=Math.floor(gridN/2);
-  const inputMag=(Math.abs(accelX)+Math.abs(accelY))*amp;
+  const inputMag=(Math.abs(vx)+Math.abs(vy))*amp;
   const t=frameN*.05;
   for(let r=0;r<=gridN;r++){
     for(let c=0;c<=gridN;c++){
